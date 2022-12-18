@@ -32,58 +32,21 @@ fun main() {
 
     DayRunner("07", testInput)
         .run("95437") { lines ->
-            val commandPattern = Regex("""\$ ([^ ]+) (.*)""")
-            val outputPattern = Regex("""([^$ ]+) (.*)""")
             val root = Directory("/")
-            var currentDirectory = root
-            lines.forEach { line ->
-                val commandParts = commandPattern.matchEntire(line)
-                if (commandParts == null) {
-                    val outputParts = outputPattern.matchEntire(line)
-                    val qualifier = commandParts.groups[1]?.value
-                    val name =
-                        commandParts.groups[2]?.value ?: throw IllegalStateException("name not found in $line")
-                    if (qualifier == "dir") {
-                        val newDirectory = Directory(name, currentDirectory)
-                        currentDirectory.subDirectories += newDirectory
-                    } else {
-                        val newFile = File(
-                            name,
-                            qualifier?.toInt() ?: throw IllegalStateException("invalid size in $line")
-                        )
-                        currentDirectory.files += newFile
-                    }
-                } else {
-                    val command = commandParts.groups[1]?.value
-                        ?: throw IllegalStateException("group name not found for cd command")
-                    when (command) {
-                        "cd" -> {
-                            val directoryName = commandParts.groups[2]?.value
-                            currentDirectory = when (directoryName) {
-                                "/" -> {
-                                    root
-                                }
-                                ".." -> {
-                                    currentDirectory.parentDirectory
-                                        ?: throw IllegalStateException("no parent directory")
-                                }
-                                else -> {
-                                    currentDirectory.subDirectories.first { directory -> directory.name == directoryName }
-                                }
-                            }
-                        }
-                        "ls" -> {
-                            // no op
-                        }
-                        else -> {
-                        }
-                    }
-                }
-            }
+            root.buildTree(lines)
             getTotalOfSmallSubdirectories(root).toString()
         }
         .run("24933642") { lines ->
-            ""
+            val root = Directory("/")
+            root.buildTree(lines)
+            val unusedSpace = 70000000 - root.totalSize
+            val spaceNeeded = 30000000 - unusedSpace
+            val directoryList = flattenDirectories(root)
+            println(spaceNeeded)
+            directoryList.filter { it.totalSize >= spaceNeeded }
+                .onEach { println(it) }
+                .minOf { it.totalSize }
+                .toString()
         }
 }
 
@@ -93,7 +56,14 @@ fun getTotalOfSmallSubdirectories(directory: Directory): Int {
     return totalOfSmallSubdirectories + totalOfTraversedSubdirectories
 }
 
-data class Command(val name: String, val qualifier: String)
+fun flattenDirectories(directory: Directory): List<Directory> {
+    if (directory.subDirectories.isEmpty()) {
+        return listOf(directory)
+    } else {
+        return directory.subDirectories.map { flattenDirectories(it) }
+            .flatten() + directory
+    }
+}
 
 data class File(val name: String, val size: Int)
 
@@ -105,6 +75,58 @@ data class Directory(
 ) {
     override fun toString(): String {
         return "Directory(name='$name', parentDirectory=${parentDirectory?.name}, subDirectories=$subDirectories, files=$files)"
+    }
+
+    fun printTree(depth: Int = 0) {
+        val indent = "\t".repeat(depth) + "|-"
+        println("$indent ${this.name} ${this.totalSize}")
+        this.subDirectories.forEach {
+            it.printTree(depth + 1)
+        }
+    }
+
+    fun buildTree(lines: List<String>) {
+        val commandPattern = Regex("""^\$ ([^ ]+) ?(.*)$""")
+        val directoryPattern = Regex("""^dir (.+)$""")
+        val filePattern = Regex("""^(\d+) (.+)$""")
+
+        var currentDirectory = this
+        lines.forEach { line ->
+            val commandMatch = commandPattern.matchEntire(line)
+            val directoryMatch = if (commandMatch == null) directoryPattern.matchEntire((line)) else null
+            val fileMatch =
+                if (commandMatch == null && directoryMatch == null) filePattern.matchEntire(line) else null
+
+            if (commandMatch != null) {
+                val command =
+                    commandMatch.groups[1]?.value ?: throw IllegalStateException("command name not found in $line")
+                when (command) {
+                    "cd" -> {
+                        val directoryName = commandMatch.groups[2]?.value
+                        currentDirectory = when (directoryName) {
+                            "/" -> this
+                            ".." -> currentDirectory.parentDirectory
+                                ?: throw IllegalStateException("${currentDirectory.name} has no parent directory")
+                            else -> currentDirectory.subDirectories.first { directory -> directory.name == directoryName }
+                        }
+                    }
+                    else -> { // no op }
+                    }
+                }
+            } else if (directoryMatch != null) {
+                val name = directoryMatch.groups[1]?.value ?: throw IllegalStateException("name not found in $line")
+                val newDirectory = Directory(name, currentDirectory)
+                currentDirectory.subDirectories += newDirectory
+            } else if (fileMatch != null) {
+                val name = fileMatch.groups[2]?.value ?: throw IllegalStateException("name not found in $line")
+                val size =
+                    fileMatch.groups[1]?.value?.toInt() ?: throw IllegalStateException("size not found in $line")
+                val newFile = File(name, size)
+                currentDirectory.files += newFile
+            } else {
+                throw IllegalStateException("unable to parse $line")
+            }
+        }
     }
 
     val totalSize: Int
